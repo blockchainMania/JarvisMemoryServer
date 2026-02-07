@@ -3,6 +3,9 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("com.google.devtools.ksp") version "2.0.21-1.0.28"
+    //id("com.android.application")
+    id("com.google.gms.google-services")
+
 }
 
 android {
@@ -34,6 +37,7 @@ android {
     }
     kotlinOptions {
         jvmTarget = "11"
+        freeCompilerArgs += listOf("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
     }
     buildFeatures {
         compose = true
@@ -89,6 +93,10 @@ dependencies {
     // --- 7. 화면 이동 (Navigation Compose) ---
     // 설명: [홈(리스트)] <-> [카메라(등록)] 화면을 왔다 갔다 하기 위해 필수
     implementation("androidx.navigation:navigation-compose:2.8.0")
+
+    implementation(platform("com.google.firebase:firebase-bom:34.9.0"))
+
+    implementation("com.google.firebase:firebase-analytics")
 
 
 }
