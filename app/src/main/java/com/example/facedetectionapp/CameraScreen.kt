@@ -92,6 +92,18 @@ fun CameraScreen(
 
     var isCameraMode by remember { mutableStateOf(true) }
 
+    var showGlassesMode by remember { mutableStateOf(false) }
+
+    // 만약 안경 모드가 켜지면, 새로 만든 화면을 보여주고 함수를 끝냅니다.
+    if (showGlassesMode) {
+        GlassesAssistantScreen()
+
+        // 안경 모드에서 '뒤로가기' 누르면 다시 원래 화면으로 돌아오기
+        BackHandler { showGlassesMode = false }
+        return
+    }
+
+
     // 팝업 상태
     var showInputDialog by remember { mutableStateOf(false) }
     var showDetailDialog by remember { mutableStateOf<Person?>(null) }
@@ -420,7 +432,12 @@ fun CameraScreen(
                 topBar = {
                     CenterAlignedTopAppBar(
                         title = { Text("인맥관리비서", fontWeight = FontWeight.Bold) },
-                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.White)
+                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.White),
+                        actions = {
+                            IconButton(onClick = { showGlassesMode = true }) {
+                                Text("👓", fontSize = 24.sp)
+                            }
+                        }
                     )
                 }
             ) { padding ->
