@@ -1,22 +1,36 @@
-*.iml
+# ── Gradle / build output ──
 .gradle
-/local.properties
+/build
+/captures
+
+# ── Android / native ──
+*.iml
+.externalNativeBuild
+.cxx
+
+# ── IntelliJ / Android Studio ──
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
-.claude/
-.cursor/
+
+# ── Kotlin ──
 .kotlin/errors/
-*.logcat
+
+# ── Local config (secrets, SDK path — never commit) ──
+local.properties
+
+# ── Logs & local databases ──
 *.log
+*.logcat
 glasslink.db
 streaming-server/glasslink.db
+
+# ── OS ──
+.DS_Store
+
+# ── AI assistant tooling ──
+.claude/
+.cursor/

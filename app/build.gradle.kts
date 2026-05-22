@@ -4,10 +4,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    id("com.google.devtools.ksp") version "2.0.21-1.0.28"
-    //id("com.android.application")
-    id("com.google.gms.google-services")
-
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services)
 }
 
 val localProperties = Properties().apply {
@@ -76,58 +74,54 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+
     // --- 1. 카메라 (CameraX) ---
-    val cameraxVersion = "1.3.0"
-    implementation("androidx.camera:camera-core:$cameraxVersion")
-    implementation("androidx.camera:camera-camera2:$cameraxVersion")
-    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
-    implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
 
-// --- 2. 아이콘 (Extended Icons) ---
-    implementation("androidx.compose.material:material-icons-extended:1.5.4")
+    // --- 2. 아이콘 (Extended Icons) ---
+    implementation(libs.androidx.compose.material.icons.extended)
 
-// --- 3. 얼굴 탐지 (ML Kit) ---
-    implementation("com.google.mlkit:face-detection:16.1.5")
+    // --- 3. 얼굴 탐지 (ML Kit) ---
+    implementation(libs.mlkit.face.detection)
 
-// --- 4. 얼굴 식별 (TensorFlow Lite) ---
-    implementation("org.tensorflow:tensorflow-lite:2.16.1") // gpu-delegate-plugin에 포함되어 있음
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1") // <-- 이 줄을 삭제하세요.
-    implementation("org.tensorflow:tensorflow-lite-gpu-delegate-plugin:0.4.4")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+    // --- 4. 얼굴 식별 (TensorFlow Lite) ---
+    implementation(libs.tensorflow.lite) // gpu-delegate-plugin에 포함되어 있음
+    implementation(libs.tensorflow.lite.gpu) // <-- 이 줄을 삭제하세요.
+    implementation(libs.tensorflow.lite.gpu.delegate.plugin)
+    implementation(libs.kotlinx.coroutines.play.services)
 
-// --- 5. 로컬 DB (Room) ---
-    val roomVersion = "2.6.1"
-    implementation("androidx.room:room-runtime:$roomVersion")
-    implementation("androidx.room:room-ktx:$roomVersion") // Kotlin Extensions
-    ksp("androidx.room:room-compiler:$roomVersion") // Annotation Processor
+    // --- 5. 로컬 DB (Room) ---
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx) // Kotlin Extensions
+    ksp(libs.androidx.room.compiler) // Annotation Processor
 
     // --- 6. 데이터 변환 (Gson) ---
     // 설명: 안면 인식 데이터(FloatArray 리스트)를 DB에 문자열로 저장하기 위해 필수
-    implementation("com.google.code.gson:gson:2.10.1")
+    implementation(libs.gson)
 
     // --- 7. 화면 이동 (Navigation Compose) ---
     // 설명: [홈(리스트)] <-> [카메라(등록)] 화면을 왔다 갔다 하기 위해 필수
-    implementation("androidx.navigation:navigation-compose:2.8.0")
+    implementation(libs.androidx.navigation.compose)
 
-    implementation(platform("com.google.firebase:firebase-bom:34.9.0"))
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
 
-    implementation("com.google.firebase:firebase-analytics")
+    // --- 8. API 통신용 (Retrofit & Gson) ---
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.converter.gson)
+    implementation(libs.okhttp.logging.interceptor)
 
-    // 8. API 통신용 (Retrofit & Gson)
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.11.0")
-
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
+    implementation(libs.androidx.lifecycle.runtime.compose)
 
     // ★ Meta Wearables DAT SDK
-    implementation("com.meta.wearable:mwdat-core:0.5.0")
-    implementation("com.meta.wearable:mwdat-camera:0.5.0")
+    implementation(libs.meta.wearables.core)
+    implementation(libs.meta.wearables.camera)
 
     // ★ LiveKit WebRTC SDK
-    implementation("io.livekit:livekit-android:2.24.1")
+    implementation(libs.livekit.android)
 
     // WebSocket (OkHttp에 포함됨 — 별도 추가 불필요)
-
-
 }

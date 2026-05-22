@@ -24,9 +24,7 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
-        mavenCentral(
-
-        )
+        mavenCentral()
         maven {
             url = uri("https://maven.pkg.github.com/facebook/meta-wearables-dat-android")
             credentials {
@@ -44,4 +42,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "FaceDetectionAPP"
 include(":app")
- 
