@@ -86,6 +86,18 @@ class MemoryCreate(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class LifeMemoryCreate(BaseModel):
+    captured_at: datetime
+    user_note: str
+    ai_interpretation: str
+    people_text: Optional[str] = None
+    related_person_ids: List[UUID] = Field(default_factory=list)
+    image_base64: Optional[str] = None
+    image_mime_type: str = "image/jpeg"
+    source: Literal["camera", "voice", "manual", "derived"] = "camera"
+    metadata: dict = Field(default_factory=dict)
+
+
 class MemoryOut(BaseModel):
     id: UUID
     captured_at: datetime
