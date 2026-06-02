@@ -146,16 +146,17 @@ python scripts/eval_embeddings.py
 - **No server-side LLM.** Proposal points etc. are synthesized by the *client*
   (Gemini Live) using context returned by `/people/{id}/context`.
   Server stays cheap, deterministic, and offline-friendly.
-- **Face embeddings come from the phone.** FaceDetectionAPP's TFLite (FaceNet
+- **Face embeddings come from the phone.** JarvisAndroidClient 또는 기존 Android
+  face pipeline의 TFLite (FaceNet
   / MobileFaceNet) already outputs them. Server only stores and searches —
   it does not run a face model.
 - **OpenClaw skipped.** Gemini Live calls these endpoints directly via
   function-calling. Add OpenClaw later only when external-app actions
   (messaging, calendar, web search) are needed — not for memory itself.
 
-## Connecting from VisionClaw
+## Connecting from JarvisAndroidClient
 
-In VisionClaw's `GeminiConfig`, declare these as functions (instead of one
+In JarvisAndroidClient's `GeminiConfig`, declare these as functions (instead of one
 `execute` tool):
 
 ```
@@ -174,7 +175,7 @@ Each maps 1:1 to an endpoint above.
 
 ## Next milestones
 
-- [ ] VisionClaw `ToolCallRouter` HTTP client to these endpoints
+- [ ] JarvisAndroidClient `ToolCallRouter` HTTP client to these endpoints
 - [ ] Gemini Live function declarations
 - [ ] Client-side: meeting transcript → needs auto-extraction (Gemini Flash)
 - [ ] Phase 3: visual memory (SigLIP 2 / jina-clip-v2) for "그 빨간 책" 검색

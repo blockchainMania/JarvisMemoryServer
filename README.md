@@ -1,3 +1,18 @@
+# JarvisMemoryServer
+
+자비스 OS의 기억 저장/검색 백엔드 레포입니다. 현재 핵심 서버는 `jarvis-server/` 폴더에 있습니다.
+
+```text
+JarvisAndroidClient
+  -> Gemini Live function calling
+  -> jarvis-server FastAPI
+  -> Postgres + pgvector + JSONB
+```
+
+서버 실행과 API 설명은 [jarvis-server/README.md](jarvis-server/README.md)를 참고하세요.
+
+아래 내용은 이 레포에 남아 있는 기존 GlassLink/FaceDetectionAPP 코드 설명입니다.
+
 # GlassLink Face Detection App
 
 Android app for testing Meta Ray-Ban glasses camera streaming, face detection, person memory, and live viewer sharing.
@@ -57,7 +72,7 @@ export OPENAI_API_KEY=YOUR_OPENAI_API_KEY
 Open the project in Android Studio:
 
 ```text
-/Users/jujaehyeong/AndroidStudioProjects/FaceDetectionAPP
+/Users/jujaehyeong/Desktop/develop/JarvisMemoryServer
 ```
 
 Or build from the terminal:
