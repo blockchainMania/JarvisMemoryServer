@@ -117,6 +117,11 @@ class MemorySearchRequest(BaseModel):
     person_id: Optional[UUID] = None
 
 
+class MemoryRecentRequest(BaseModel):
+    limit: int = 20
+    memory_type: Optional[str] = "life_scene"
+
+
 class MemoryMatch(BaseModel):
     memory: MemoryOut
     score: float

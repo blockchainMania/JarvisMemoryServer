@@ -9,7 +9,14 @@ from psycopg.types.json import Jsonb
 from ..auth import require_api_key
 from ..db import get_conn
 from ..embeddings import embed_text
-from ..schemas import LifeMemoryCreate, MemoryCreate, MemoryMatch, MemoryOut, MemorySearchRequest
+from ..schemas import (
+    LifeMemoryCreate,
+    MemoryCreate,
+    MemoryMatch,
+    MemoryOut,
+    MemoryRecentRequest,
+    MemorySearchRequest,
+)
 
 router = APIRouter(
     prefix="/memory",
@@ -72,6 +79,29 @@ def save_memory(body: MemoryCreate) -> MemoryOut:
             row = cur.fetchone()
         conn.commit()
     return _row_to_memory(row)
+
+
+@router.post("/recent", response_model=List[MemoryOut])
+def recent_memories(body: MemoryRecentRequest) -> List[MemoryOut]:
+    limit = max(1, min(body.limit, 100))
+    sql = [
+        "SELECT *",
+        "FROM memories",
+        "WHERE 1 = 1",
+    ]
+    params: list = []
+    if body.memory_type:
+        sql.append("AND metadata->>'memory_type' = %s")
+        params.append(body.memory_type)
+    sql.append("ORDER BY captured_at DESC, created_at DESC LIMIT %s")
+    params.append(limit)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("\n".join(sql), params)
+            rows = cur.fetchall()
+
+    return [_row_to_memory(r) for r in rows]
 
 
 @router.post("/life/save", response_model=MemoryOut, status_code=201)
