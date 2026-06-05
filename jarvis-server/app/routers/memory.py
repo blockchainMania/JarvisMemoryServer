@@ -364,27 +364,81 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
 @router.post("/search", response_model=List[MemoryMatch])
 def search_memories(body: MemorySearchRequest) -> List[MemoryMatch]:
     qvec = embed_text(body.query)
-    sql = [
-        "SELECT *, 1 - (embedding <=> %s::vector) AS _score",
-        "FROM memories",
-        "WHERE embedding IS NOT NULL",
-    ]
-    params: list = [qvec]
+    limit = max(1, min(body.top_k, 20))
+    like = f"%{body.query}%"
+
+    filters: list[str] = []
+    filter_params: list = []
     if body.time_from:
-        sql.append("AND captured_at >= %s"); params.append(body.time_from)
+        filters.append("m.captured_at >= %s")
+        filter_params.append(body.time_from)
     if body.time_to:
-        sql.append("AND captured_at <= %s"); params.append(body.time_to)
+        filters.append("m.captured_at <= %s")
+        filter_params.append(body.time_to)
     if body.person_id:
-        sql.append("AND %s = ANY(related_person_ids)"); params.append(body.person_id)
-    sql.append("ORDER BY embedding <=> %s::vector LIMIT %s")
-    params.extend([qvec, body.top_k])
+        filters.append("%s = ANY(m.related_person_ids)")
+        filter_params.append(body.person_id)
+    filter_sql = " AND ".join(filters)
+    if filter_sql:
+        filter_sql = f"AND {filter_sql}"
+
+    exact_sql = f"""
+        SELECT DISTINCT m.*, 1.15::float AS _score
+        FROM memories m
+        LEFT JOIN memory_entities me ON me.memory_id = m.id
+        LEFT JOIN entities e ON e.id = me.entity_id
+        WHERE 1 = 1
+          {filter_sql}
+          AND (
+              m.text ILIKE %s
+              OR m.metadata->>'user_note' ILIKE %s
+              OR m.metadata->>'ai_interpretation' ILIKE %s
+              OR m.metadata->>'people_text' ILIKE %s
+              OR EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements_text(COALESCE(m.metadata->'labels', '[]'::jsonb)) AS label
+                  WHERE label ILIKE %s
+              )
+              OR e.label ILIKE %s
+              OR e.entity_type ILIKE %s
+          )
+        ORDER BY m.captured_at DESC, m.created_at DESC
+        LIMIT %s
+    """
+
+    vector_sql = f"""
+        SELECT m.*, 1 - (m.embedding <=> %s::vector) AS _score
+        FROM memories m
+        WHERE m.embedding IS NOT NULL
+          {filter_sql}
+        ORDER BY m.embedding <=> %s::vector
+        LIMIT %s
+    """
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("\n".join(sql), params)
-            rows = cur.fetchall()
+            cur.execute(
+                exact_sql,
+                filter_params + [like, like, like, like, like, like, like, limit],
+            )
+            exact_rows = cur.fetchall()
+            cur.execute(
+                vector_sql,
+                [qvec] + filter_params + [qvec, limit],
+            )
+            vector_rows = cur.fetchall()
 
-    return [
-        MemoryMatch(memory=_row_to_memory(r), score=float(r["_score"]))
-        for r in rows
-    ]
+    merged: dict = {}
+    for row in exact_rows + vector_rows:
+        memory_id = row["id"]
+        score = float(row["_score"])
+        if memory_id not in merged or score > merged[memory_id]["_score"]:
+            merged[memory_id] = dict(row)
+
+    rows = sorted(
+        merged.values(),
+        key=lambda r: (float(r["_score"]), r["captured_at"]),
+        reverse=True,
+    )[:limit]
+
+    return [MemoryMatch(memory=_row_to_memory(r), score=float(r["_score"])) for r in rows]
