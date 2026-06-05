@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import close_pool, open_pool
-from .routers import meetings, memory, needs, people, proposals
+from .routers import live, meetings, memory, needs, people, proposals
 
 
 @asynccontextmanager
@@ -24,6 +24,7 @@ app = FastAPI(
 app.include_router(people.router)
 app.include_router(meetings.router)
 app.include_router(memory.router)
+app.include_router(live.router)
 app.include_router(needs.router)
 app.include_router(proposals.router)
 

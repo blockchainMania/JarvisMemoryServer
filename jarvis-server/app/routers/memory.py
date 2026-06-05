@@ -1,9 +1,12 @@
 import base64
+from datetime import timezone
 from pathlib import Path
 from typing import List
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from psycopg.types.json import Jsonb
 
 from ..auth import require_api_key
@@ -31,6 +34,7 @@ _IMAGE_EXTENSIONS = {
     "image/png": ".png",
     "image/webp": ".webp",
 }
+_KST = ZoneInfo("Asia/Seoul")
 
 
 def _row_to_memory(row: dict) -> MemoryOut:
@@ -51,6 +55,12 @@ def _save_memory_image(image_base64: str, mime_type: str) -> dict:
         "image_mime_type": mime_type,
         "image_size_bytes": len(image_bytes),
     }
+
+
+def _captured_at_kst(captured_at) -> str:
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=timezone.utc)
+    return captured_at.astimezone(_KST).isoformat()
 
 
 @router.post("/save", response_model=MemoryOut, status_code=201)
@@ -104,6 +114,16 @@ def recent_memories(body: MemoryRecentRequest) -> List[MemoryOut]:
     return [_row_to_memory(r) for r in rows]
 
 
+@router.get("/images/{filename}")
+def memory_image(filename: str):
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    path = _IMAGE_DIR / filename
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="image not found")
+    return FileResponse(path)
+
+
 @router.post("/life/save", response_model=MemoryOut, status_code=201)
 def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
     text_parts = [
@@ -122,6 +142,7 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
             "user_note": body.user_note,
             "ai_interpretation": body.ai_interpretation,
             "people_text": body.people_text,
+            "captured_at_kst": metadata.get("captured_at_kst") or _captured_at_kst(body.captured_at),
         }
     )
     if body.image_base64:
