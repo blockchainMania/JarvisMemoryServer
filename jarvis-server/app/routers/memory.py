@@ -1,7 +1,8 @@
 import base64
+import re
 from datetime import timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,7 @@ _IMAGE_EXTENSIONS = {
     "image/webp": ".webp",
 }
 _KST = ZoneInfo("Asia/Seoul")
+_ENTITY_TYPES = {"person", "company", "object", "place", "document", "business_card", "vehicle", "food"}
 
 
 def _row_to_memory(row: dict) -> MemoryOut:
@@ -61,6 +63,157 @@ def _captured_at_kst(captured_at) -> str:
     if captured_at.tzinfo is None:
         captured_at = captured_at.replace(tzinfo=timezone.utc)
     return captured_at.astimezone(_KST).isoformat()
+
+
+def _clean_label(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip())
+
+
+def _auto_labels(body: LifeMemoryCreate) -> list[str]:
+    source = f"{body.user_note}\n{body.ai_interpretation}\n{body.people_text or ''}".lower()
+    labels = {_clean_label(label) for label in body.labels if _clean_label(label)}
+    if "명함" in source or "business card" in source:
+        labels.add("business_card")
+        labels.add("document")
+    if "자동차" in source or "차량" in source or "차 " in source:
+        labels.add("vehicle")
+    if "문서" in source or "계약서" in source or "견적서" in source:
+        labels.add("document")
+    return sorted(labels)
+
+
+def _people_text_to_entity(people_text: Optional[str]) -> Optional[dict]:
+    if not people_text:
+        return None
+    first = re.split(r"[,/\n]", people_text, maxsplit=1)[0]
+    label = _clean_label(first)
+    if not label:
+        return None
+    return {
+        "type": "person",
+        "label": label,
+        "metadata": {"source": "people_text", "raw": people_text},
+    }
+
+
+def _normalize_entities(body: LifeMemoryCreate, labels: list[str]) -> list[dict]:
+    normalized: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(
+        entity_type: str,
+        label: str,
+        metadata: Optional[dict] = None,
+        aliases: Optional[List[str]] = None,
+    ):
+        entity_type = entity_type if entity_type in _ENTITY_TYPES else "object"
+        label = _clean_label(label)
+        if not label:
+            return
+        key = (entity_type, label.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        normalized.append(
+            {
+                "type": entity_type,
+                "label": label,
+                "aliases": aliases or [],
+                "metadata": metadata or {},
+            }
+        )
+
+    for item in body.entities:
+        if not isinstance(item, dict):
+            continue
+        add(
+            str(item.get("type") or item.get("entity_type") or "object"),
+            str(item.get("label") or item.get("name") or ""),
+            item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            item.get("aliases") if isinstance(item.get("aliases"), list) else [],
+        )
+
+    people_entity = _people_text_to_entity(body.people_text)
+    if people_entity:
+        add(people_entity["type"], people_entity["label"], people_entity["metadata"])
+
+    for label in labels:
+        add("business_card" if label == "business_card" else "object", label, {"source": "label"})
+
+    return normalized
+
+
+def _upsert_entity(cur, entity: dict):
+    searchable = f"{entity['type']} {entity['label']} {' '.join(entity.get('aliases') or [])}"
+    cur.execute(
+        """
+        INSERT INTO entities (entity_type, label, aliases, metadata, embedding)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (entity_type, label)
+        DO UPDATE SET
+            aliases = (
+                SELECT ARRAY(
+                    SELECT DISTINCT x
+                    FROM unnest(entities.aliases || EXCLUDED.aliases) AS x
+                    WHERE x <> ''
+                )
+            ),
+            metadata = entities.metadata || EXCLUDED.metadata,
+            embedding = EXCLUDED.embedding,
+            updated_at = now()
+        RETURNING id
+        """,
+        (
+            entity["type"],
+            entity["label"],
+            entity.get("aliases") or [],
+            Jsonb(entity.get("metadata") or {}),
+            embed_text(searchable),
+        ),
+    )
+    return cur.fetchone()["id"]
+
+
+def _upsert_person_from_entity(cur, entity: dict, captured_at):
+    if entity["type"] != "person":
+        return None
+    name = entity["label"]
+    metadata = dict(entity.get("metadata") or {})
+    metadata["source"] = metadata.get("source") or "life_memory_entity"
+    cur.execute(
+        """
+        SELECT id FROM people
+        WHERE lower(name) = lower(%s)
+        LIMIT 1
+        """,
+        (name,),
+    )
+    row = cur.fetchone()
+    if row:
+        cur.execute(
+            "UPDATE people SET last_met_at = GREATEST(COALESCE(last_met_at, %s), %s), updated_at = now() WHERE id = %s",
+            (captured_at, captured_at, row["id"]),
+        )
+        return row["id"]
+    cur.execute(
+        """
+        INSERT INTO people (name, aliases, first_met_at, last_met_at, notes_summary, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """,
+        (
+            name,
+            entity.get("aliases") or [],
+            captured_at,
+            captured_at,
+            metadata.get("raw") or "Saved from life memory",
+            Jsonb(metadata),
+        ),
+    )
+    row = cur.fetchone()
+    if row:
+        return row["id"]
+    return None
 
 
 @router.post("/save", response_model=MemoryOut, status_code=201)
@@ -126,12 +279,23 @@ def memory_image(filename: str):
 
 @router.post("/life/save", response_model=MemoryOut, status_code=201)
 def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
+    labels = _auto_labels(body)
+    entities = _normalize_entities(body, labels)
+    related_person_ids = list(body.related_person_ids)
+
     text_parts = [
         f"사용자 메모: {body.user_note}",
         f"AI 장면 해석: {body.ai_interpretation}",
     ]
     if body.people_text:
         text_parts.append(f"관련 사람: {body.people_text}")
+    if labels:
+        text_parts.append(f"라벨: {', '.join(labels)}")
+    if entities:
+        text_parts.append(
+            "객체: "
+            + ", ".join(f"{entity['type']}={entity['label']}" for entity in entities)
+        )
     text = "\n".join(text_parts)
     embedding = embed_text(text)
 
@@ -142,6 +306,8 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
             "user_note": body.user_note,
             "ai_interpretation": body.ai_interpretation,
             "people_text": body.people_text,
+            "labels": labels,
+            "entities": entities,
             "captured_at_kst": metadata.get("captured_at_kst") or _captured_at_kst(body.captured_at),
         }
     )
@@ -150,6 +316,14 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            entity_ids = []
+            for entity in entities:
+                entity_id = _upsert_entity(cur, entity)
+                entity_ids.append((entity_id, entity))
+                person_id = _upsert_person_from_entity(cur, entity, body.captured_at)
+                if person_id and person_id not in related_person_ids:
+                    related_person_ids.append(person_id)
+
             cur.execute(
                 """
                 INSERT INTO memories
@@ -162,12 +336,27 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
                     body.captured_at,
                     text,
                     embedding,
-                    body.related_person_ids,
+                    related_person_ids,
                     body.source,
                     Jsonb(metadata),
                 ),
             )
             row = cur.fetchone()
+            for entity_id, entity in entity_ids:
+                cur.execute(
+                    """
+                    INSERT INTO memory_entities
+                        (memory_id, entity_id, relation, confidence)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        row["id"],
+                        entity_id,
+                        "contains" if entity["type"] in {"business_card", "document", "object"} else "mentions",
+                        1.0,
+                    ),
+                )
         conn.commit()
     return _row_to_memory(row)
 

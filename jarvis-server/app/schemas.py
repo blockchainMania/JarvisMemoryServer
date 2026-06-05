@@ -91,6 +91,8 @@ class LifeMemoryCreate(BaseModel):
     user_note: str
     ai_interpretation: str
     people_text: Optional[str] = None
+    labels: List[str] = Field(default_factory=list)
+    entities: List[dict] = Field(default_factory=list)
     related_person_ids: List[UUID] = Field(default_factory=list)
     image_base64: Optional[str] = None
     image_mime_type: str = "image/jpeg"

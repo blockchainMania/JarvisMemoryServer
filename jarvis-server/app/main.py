@@ -3,13 +3,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .config import settings
-from .db import close_pool, open_pool
+from .db import close_pool, ensure_schema, open_pool
 from .routers import live, meetings, memory, needs, people, proposals
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     open_pool()
+    ensure_schema()
     yield
     close_pool()
 
