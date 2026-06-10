@@ -20,6 +20,7 @@ from ..schemas import (
     MemoryOut,
     MemoryRecentRequest,
     MemorySearchRequest,
+    UniversalSearchResult,
 )
 
 router = APIRouter(
@@ -361,8 +362,7 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
     return _row_to_memory(row)
 
 
-@router.post("/search", response_model=List[MemoryMatch])
-def search_memories(body: MemorySearchRequest) -> List[MemoryMatch]:
+def _search_memory_rows(body: MemorySearchRequest) -> list:
     qvec = embed_text(body.query)
     limit = max(1, min(body.top_k, 20))
     like = f"%{body.query}%"
@@ -441,4 +441,89 @@ def search_memories(body: MemorySearchRequest) -> List[MemoryMatch]:
         reverse=True,
     )[:limit]
 
+    return rows
+
+
+@router.post("/search", response_model=List[MemoryMatch])
+def search_memories(body: MemorySearchRequest) -> List[MemoryMatch]:
+    rows = _search_memory_rows(body)
     return [MemoryMatch(memory=_row_to_memory(r), score=float(r["_score"])) for r in rows]
+
+
+@router.post("/universal-search", response_model=List[UniversalSearchResult])
+def universal_search(body: MemorySearchRequest) -> List[UniversalSearchResult]:
+    rows = _search_memory_rows(body)
+    if not rows:
+        return []
+
+    results = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for row in rows:
+                person_ids = row["related_person_ids"] or []
+                people = []
+                needs = []
+                if person_ids:
+                    cur.execute(
+                        "SELECT * FROM people WHERE id = ANY(%s::uuid[])",
+                        (person_ids,),
+                    )
+                    people = cur.fetchall()
+                    if row["related_meeting_id"]:
+                        cur.execute(
+                            """
+                            SELECT id, person_id, meeting_id, text, category,
+                                   confidence, metadata, created_at
+                            FROM needs
+                            WHERE meeting_id = %s
+                            ORDER BY created_at DESC
+                            LIMIT 20
+                            """,
+                            (row["related_meeting_id"],),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id, person_id, meeting_id, text, category,
+                                   confidence, metadata, created_at
+                            FROM needs
+                            WHERE person_id = ANY(%s::uuid[])
+                            ORDER BY created_at DESC
+                            LIMIT 20
+                            """,
+                            (person_ids,),
+                        )
+                    needs = cur.fetchall()
+
+                meeting = None
+                if row["related_meeting_id"]:
+                    cur.execute(
+                        "SELECT * FROM meetings WHERE id = %s",
+                        (row["related_meeting_id"],),
+                    )
+                    meeting = cur.fetchone()
+
+                cur.execute(
+                    """
+                    SELECT e.id, e.entity_type, e.label, e.aliases, e.metadata,
+                           me.relation, me.confidence
+                    FROM memory_entities me
+                    JOIN entities e ON e.id = me.entity_id
+                    WHERE me.memory_id = %s
+                    ORDER BY me.confidence DESC, e.label
+                    """,
+                    (row["id"],),
+                )
+                entities = cur.fetchall()
+
+                results.append(
+                    UniversalSearchResult(
+                        memory=_row_to_memory(row),
+                        score=float(row["_score"]),
+                        people=people,
+                        meeting=meeting,
+                        entities=entities,
+                        needs=needs,
+                    )
+                )
+    return results

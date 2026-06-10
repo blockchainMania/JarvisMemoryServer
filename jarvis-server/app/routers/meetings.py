@@ -49,6 +49,38 @@ def create_meeting(body: MeetingCreate) -> MeetingOut:
             )
             row = cur.fetchone()
 
+            memory_text = "\n".join(
+                part
+                for part in [
+                    f"미팅: {body.title}" if body.title else "미팅 기록",
+                    f"요약: {body.summary}" if body.summary else None,
+                    f"장소: {body.location}" if body.location else None,
+                    f"원문: {body.raw_transcript}" if body.raw_transcript else None,
+                ]
+                if part
+            )
+            cur.execute(
+                """
+                INSERT INTO memories
+                    (captured_at, text, embedding, related_person_ids,
+                     related_meeting_id, source, metadata)
+                VALUES (%s, %s, %s, %s, %s, 'derived', %s)
+                """,
+                (
+                    body.started_at,
+                    memory_text,
+                    embed_text(memory_text),
+                    body.person_ids,
+                    row["id"],
+                    Jsonb(
+                        {
+                            "memory_type": "meeting",
+                            "origin_meeting_id": str(row["id"]),
+                        }
+                    ),
+                ),
+            )
+
             if body.person_ids:
                 # Touch first_met_at / last_met_at on each person.
                 cur.execute(

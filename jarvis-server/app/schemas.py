@@ -129,6 +129,15 @@ class MemoryMatch(BaseModel):
     score: float
 
 
+class UniversalSearchResult(BaseModel):
+    memory: MemoryOut
+    score: float
+    people: List[PersonOut] = Field(default_factory=list)
+    meeting: Optional[MeetingOut] = None
+    entities: List[dict] = Field(default_factory=list)
+    needs: List[dict] = Field(default_factory=list)
+
+
 # ─── Needs ────────────────────────────────────────────────────
 class NeedCreate(BaseModel):
     person_id: UUID

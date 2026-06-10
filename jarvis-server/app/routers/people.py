@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List
 from uuid import UUID
 
@@ -6,6 +7,7 @@ from psycopg.types.json import Jsonb
 
 from ..auth import require_api_key
 from ..db import get_conn
+from ..embeddings import embed_text
 from ..schemas import PersonCreate, PersonMatch, PersonOut, PersonSearchRequest
 
 router = APIRouter(
@@ -46,6 +48,38 @@ def create_person(body: PersonCreate) -> PersonOut:
                 ),
             )
             row = cur.fetchone()
+            captured_at = body.first_met_at or body.last_met_at or datetime.now(timezone.utc)
+            memory_text = "\n".join(
+                part
+                for part in [
+                    f"사람: {body.name}",
+                    f"별칭: {', '.join(body.aliases)}" if body.aliases else None,
+                    f"소속: {body.org}" if body.org else None,
+                    f"직책: {body.role}" if body.role else None,
+                    f"메모: {body.notes_summary}" if body.notes_summary else None,
+                ]
+                if part
+            )
+            cur.execute(
+                """
+                INSERT INTO memories
+                    (captured_at, text, embedding, related_person_ids,
+                     source, metadata)
+                VALUES (%s, %s, %s, %s, 'derived', %s)
+                """,
+                (
+                    captured_at,
+                    memory_text,
+                    embed_text(memory_text),
+                    [row["id"]],
+                    Jsonb(
+                        {
+                            "memory_type": "person_profile",
+                            "origin_person_id": str(row["id"]),
+                        }
+                    ),
+                ),
+            )
         conn.commit()
     return _row_to_person(row)
 
