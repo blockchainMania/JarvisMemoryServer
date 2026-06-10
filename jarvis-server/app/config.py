@@ -20,5 +20,16 @@ class Settings:
     face_embedding_dim: int = int(os.getenv("FACE_EMBEDDING_DIM", "512"))
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "cpu")
 
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    openai_transcription_model: str = os.getenv(
+        "OPENAI_TRANSCRIPTION_MODEL",
+        "gpt-4o-mini-transcribe",
+    )
+    openai_summary_model: str = os.getenv(
+        "OPENAI_SUMMARY_MODEL",
+        "gpt-4.1-mini",
+    )
+    openai_reasoning_effort: str = os.getenv("OPENAI_REASONING_EFFORT", "low")
+
 
 settings = Settings()
