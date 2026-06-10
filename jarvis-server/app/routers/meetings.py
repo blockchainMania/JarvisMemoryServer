@@ -1,12 +1,19 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import List
 from uuid import UUID
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from psycopg.types.json import Jsonb
 
 from ..auth import require_api_key
+from ..config import settings
 from ..db import get_conn
 from ..embeddings import embed_text
+from ..meeting_ai import summarize_transcript, transcribe_audio
 from ..schemas import MeetingCreate, MeetingOut, MeetingSearchRequest
 
 router = APIRouter(
@@ -16,6 +23,8 @@ router = APIRouter(
 )
 
 _MEETING_FIELDS = list(MeetingOut.model_fields.keys())
+_RECORDING_DIR = Path(__file__).resolve().parents[2] / "data" / "meeting-recordings"
+_MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 
 def _row_to_meeting(row: dict) -> MeetingOut:
@@ -99,6 +108,128 @@ def create_meeting(body: MeetingCreate) -> MeetingOut:
                 )
         conn.commit()
     return _row_to_meeting(row)
+
+
+@router.post("/recordings", status_code=201)
+async def create_meeting_from_recording(
+    audio: UploadFile = File(...),
+    title: str = Form(""),
+    started_at: str = Form(""),
+    ended_at: str = Form(""),
+    person_ids: str = Form("[]"),
+):
+    suffix = Path(audio.filename or "meeting.wav").suffix.lower()
+    if suffix not in {".wav", ".mp3", ".m4a", ".mp4", ".webm", ".mpeg", ".mpga"}:
+        raise HTTPException(400, "unsupported audio format")
+
+    audio_bytes = await audio.read(_MAX_AUDIO_BYTES + 1)
+    if not audio_bytes:
+        raise HTTPException(400, "empty audio file")
+    if len(audio_bytes) > _MAX_AUDIO_BYTES:
+        raise HTTPException(413, "audio file exceeds 25 MB")
+
+    _RECORDING_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4()}{suffix}"
+    path = _RECORDING_DIR / filename
+    path.write_bytes(audio_bytes)
+
+    try:
+        parsed_person_ids = [UUID(value) for value in json.loads(person_ids)]
+    except (ValueError, TypeError, json.JSONDecodeError):
+        raise HTTPException(400, "person_ids must be a JSON UUID array")
+
+    try:
+        started = datetime.fromisoformat(started_at) if started_at else datetime.now(timezone.utc)
+        ended = datetime.fromisoformat(ended_at) if ended_at else datetime.now(timezone.utc)
+        transcript = await run_in_threadpool(transcribe_audio, path)
+        if not transcript:
+            raise HTTPException(422, "no speech was transcribed")
+        summary_data = await run_in_threadpool(summarize_transcript, transcript, title)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"meeting AI processing failed: {exc}") from exc
+
+    meeting_title = summary_data.get("title") or title or "회의 녹음"
+    summary = summary_data.get("summary") or transcript[:500]
+    metadata = {
+        "recording_filename": filename,
+        "recording_path": str(path),
+        "recording_mime_type": audio.content_type or "audio/wav",
+        "recording_size_bytes": len(audio_bytes),
+        "transcription_model": settings.openai_transcription_model,
+        "summary_model": settings.openai_summary_model,
+        "decisions": summary_data.get("decisions", []),
+        "action_items": summary_data.get("action_items", []),
+        "people": summary_data.get("people", []),
+        "companies": summary_data.get("companies", []),
+        "keywords": summary_data.get("keywords", []),
+    }
+
+    meeting_embedding = embed_text(summary)
+    memory_text = "\n".join(
+        [
+            f"미팅: {meeting_title}",
+            f"요약: {summary}",
+            f"결정사항: {', '.join(metadata['decisions'])}",
+            f"할일: {', '.join(metadata['action_items'])}",
+            f"원문: {transcript}",
+        ]
+    )
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO meetings
+                    (title, person_ids, started_at, ended_at, summary,
+                     summary_embedding, raw_transcript, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    meeting_title,
+                    parsed_person_ids,
+                    started,
+                    ended,
+                    summary,
+                    meeting_embedding,
+                    transcript,
+                    Jsonb(metadata),
+                ),
+            )
+            meeting = cur.fetchone()
+            cur.execute(
+                """
+                INSERT INTO memories
+                    (captured_at, text, embedding, related_person_ids,
+                     related_meeting_id, source, metadata)
+                VALUES (%s, %s, %s, %s, %s, 'voice', %s)
+                RETURNING *
+                """,
+                (
+                    started,
+                    memory_text,
+                    embed_text(memory_text),
+                    parsed_person_ids,
+                    meeting["id"],
+                    Jsonb(
+                        {
+                            "memory_type": "meeting_recording",
+                            "origin_meeting_id": str(meeting["id"]),
+                            **metadata,
+                        }
+                    ),
+                ),
+            )
+            memory = cur.fetchone()
+        conn.commit()
+
+    return {
+        "meeting": _row_to_meeting(meeting).model_dump(mode="json"),
+        "memory_id": str(memory["id"]),
+        "summary": summary_data,
+        "transcript": transcript,
+    }
 
 
 @router.get("/{meeting_id}", response_model=MeetingOut)

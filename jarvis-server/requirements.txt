@@ -6,3 +6,5 @@ pgvector>=0.3.6
 sentence-transformers>=3.3
 python-dotenv>=1.0
 numpy>=1.26
+openai>=1.68
+python-multipart>=0.0.20
