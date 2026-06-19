@@ -20,6 +20,7 @@ from ..schemas import (
     MemoryOut,
     MemoryRecentRequest,
     MemorySearchRequest,
+    MemoryUpdate,
     UniversalSearchResult,
 )
 
@@ -60,6 +61,18 @@ def _save_memory_image(image_base64: str, mime_type: str) -> dict:
     }
 
 
+def _delete_memory_image(metadata: dict) -> None:
+    image_path = metadata.get("image_path")
+    if not image_path:
+        return
+    try:
+        path = Path(image_path)
+        if path.exists() and path.is_file():
+            path.unlink()
+    except OSError:
+        pass
+
+
 def _captured_at_kst(captured_at) -> str:
     if captured_at.tzinfo is None:
         captured_at = captured_at.replace(tzinfo=timezone.utc)
@@ -81,6 +94,23 @@ def _auto_labels(body: LifeMemoryCreate) -> list[str]:
     if "문서" in source or "계약서" in source or "견적서" in source:
         labels.add("document")
     return sorted(labels)
+
+
+def _build_life_memory_text(user_note: str, ai_interpretation: str, people_text: Optional[str], labels: list[str], entities: list[dict]) -> str:
+    text_parts = [
+        f"사용자 메모: {user_note}",
+        f"AI 장면 해석: {ai_interpretation}",
+    ]
+    if people_text:
+        text_parts.append(f"관련 사람: {people_text}")
+    if labels:
+        text_parts.append(f"라벨: {', '.join(labels)}")
+    if entities:
+        text_parts.append(
+            "객체: "
+            + ", ".join(f"{entity['type']}={entity['label']}" for entity in entities)
+        )
+    return "\n".join(text_parts)
 
 
 def _people_text_to_entity(people_text: Optional[str]) -> Optional[dict]:
@@ -283,21 +313,13 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
     labels = _auto_labels(body)
     entities = _normalize_entities(body, labels)
     related_person_ids = list(body.related_person_ids)
-
-    text_parts = [
-        f"사용자 메모: {body.user_note}",
-        f"AI 장면 해석: {body.ai_interpretation}",
-    ]
-    if body.people_text:
-        text_parts.append(f"관련 사람: {body.people_text}")
-    if labels:
-        text_parts.append(f"라벨: {', '.join(labels)}")
-    if entities:
-        text_parts.append(
-            "객체: "
-            + ", ".join(f"{entity['type']}={entity['label']}" for entity in entities)
-        )
-    text = "\n".join(text_parts)
+    text = _build_life_memory_text(
+        body.user_note,
+        body.ai_interpretation,
+        body.people_text,
+        labels,
+        entities,
+    )
     embedding = embed_text(text)
 
     metadata = dict(body.metadata)
@@ -360,6 +382,98 @@ def save_life_memory(body: LifeMemoryCreate) -> MemoryOut:
                 )
         conn.commit()
     return _row_to_memory(row)
+
+
+@router.get("/{memory_id}", response_model=MemoryOut)
+def get_memory(memory_id: str) -> MemoryOut:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "memory not found")
+    return _row_to_memory(row)
+
+
+@router.put("/{memory_id}", response_model=MemoryOut)
+def update_memory(memory_id: str, body: MemoryUpdate) -> MemoryOut:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM memories WHERE id = %s", (memory_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "memory not found")
+
+            metadata = dict(row["metadata"] or {})
+            if body.metadata:
+                metadata.update(body.metadata)
+
+            user_note = body.user_note if body.user_note is not None else metadata.get("user_note")
+            ai_interpretation = (
+                body.ai_interpretation
+                if body.ai_interpretation is not None
+                else metadata.get("ai_interpretation")
+            )
+            people_text = body.people_text if body.people_text is not None else metadata.get("people_text")
+
+            if body.user_note is not None:
+                metadata["user_note"] = body.user_note
+            if body.ai_interpretation is not None:
+                metadata["ai_interpretation"] = body.ai_interpretation
+            if body.people_text is not None:
+                metadata["people_text"] = body.people_text
+
+            text = body.text if body.text is not None else row["text"]
+            if metadata.get("memory_type") == "life_scene" and user_note and ai_interpretation:
+                labels = metadata.get("labels") if isinstance(metadata.get("labels"), list) else []
+                entities = metadata.get("entities") if isinstance(metadata.get("entities"), list) else []
+                text = _build_life_memory_text(
+                    user_note=user_note,
+                    ai_interpretation=ai_interpretation,
+                    people_text=people_text,
+                    labels=labels,
+                    entities=entities,
+                )
+
+            captured_at = body.captured_at or row["captured_at"]
+            metadata["captured_at_kst"] = _captured_at_kst(captured_at)
+
+            cur.execute(
+                """
+                UPDATE memories
+                SET captured_at = %s,
+                    text = %s,
+                    embedding = %s,
+                    metadata = %s
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    captured_at,
+                    text,
+                    embed_text(text),
+                    Jsonb(metadata),
+                    memory_id,
+                ),
+            )
+            updated = cur.fetchone()
+        conn.commit()
+    return _row_to_memory(updated)
+
+
+@router.delete("/{memory_id}", status_code=204)
+def delete_memory(memory_id: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT metadata FROM memories WHERE id = %s", (memory_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "memory not found")
+            metadata = dict(row["metadata"] or {})
+            cur.execute("DELETE FROM memories WHERE id = %s", (memory_id,))
+        conn.commit()
+    _delete_memory_image(metadata)
+    return None
 
 
 def _search_memory_rows(body: MemorySearchRequest) -> list:

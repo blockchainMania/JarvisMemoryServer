@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 from uuid import uuid4
 
@@ -14,7 +14,7 @@ from ..config import settings
 from ..db import get_conn
 from ..embeddings import embed_text
 from ..meeting_ai import summarize_transcript, transcribe_audio
-from ..schemas import MeetingCreate, MeetingOut, MeetingSearchRequest
+from ..schemas import MeetingCreate, MeetingOut, MeetingSearchRequest, MeetingUpdate
 
 router = APIRouter(
     prefix="/meetings",
@@ -29,6 +29,47 @@ _MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 def _row_to_meeting(row: dict) -> MeetingOut:
     return MeetingOut(**{k: row[k] for k in _MEETING_FIELDS})
+
+
+def _meeting_memory_text(
+    title: Optional[str],
+    summary: Optional[str],
+    transcript: Optional[str],
+    location: Optional[str],
+    decisions: Optional[List[str]] = None,
+    action_items: Optional[List[str]] = None,
+) -> str:
+    return "\n".join(
+        part
+        for part in [
+            f"미팅: {title}" if title else "미팅 기록",
+            f"요약: {summary}" if summary else None,
+            f"장소: {location}" if location else None,
+            f"결정사항: {', '.join(decisions or [])}" if decisions else None,
+            f"할일: {', '.join(action_items or [])}" if action_items else None,
+            f"원문: {transcript}" if transcript else None,
+        ]
+        if part
+    )
+
+
+@router.get("", response_model=List[MeetingOut])
+def list_meetings(limit: int = 30, offset: int = 0) -> List[MeetingOut]:
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM meetings
+                ORDER BY started_at DESC NULLS LAST, created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset),
+            )
+            rows = cur.fetchall()
+    return [_row_to_meeting(row) for row in rows]
 
 
 @router.post("", response_model=MeetingOut, status_code=201)
@@ -58,15 +99,11 @@ def create_meeting(body: MeetingCreate) -> MeetingOut:
             )
             row = cur.fetchone()
 
-            memory_text = "\n".join(
-                part
-                for part in [
-                    f"미팅: {body.title}" if body.title else "미팅 기록",
-                    f"요약: {body.summary}" if body.summary else None,
-                    f"장소: {body.location}" if body.location else None,
-                    f"원문: {body.raw_transcript}" if body.raw_transcript else None,
-                ]
-                if part
+            memory_text = _meeting_memory_text(
+                body.title,
+                body.summary,
+                body.raw_transcript,
+                body.location,
             )
             cur.execute(
                 """
@@ -159,6 +196,7 @@ async def create_meeting_from_recording(
         "recording_size_bytes": len(audio_bytes),
         "transcription_model": settings.openai_transcription_model,
         "summary_model": settings.openai_summary_model,
+        "markdown_summary": summary_data.get("markdown_summary", ""),
         "decisions": summary_data.get("decisions", []),
         "action_items": summary_data.get("action_items", []),
         "people": summary_data.get("people", []),
@@ -241,6 +279,110 @@ def get_meeting(meeting_id: UUID) -> MeetingOut:
             if not row:
                 raise HTTPException(404, "meeting not found")
     return _row_to_meeting(row)
+
+
+@router.put("/{meeting_id}", response_model=MeetingOut)
+def update_meeting(meeting_id: UUID, body: MeetingUpdate) -> MeetingOut:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM meetings WHERE id = %s", (meeting_id,))
+            existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(404, "meeting not found")
+
+            metadata = dict(existing["metadata"] or {})
+            if body.metadata:
+                metadata.update(body.metadata)
+
+            title = body.title if body.title is not None else existing["title"]
+            started_at = body.started_at or existing["started_at"]
+            ended_at = body.ended_at if body.ended_at is not None else existing["ended_at"]
+            location = body.location if body.location is not None else existing["location"]
+            summary = body.summary if body.summary is not None else existing["summary"]
+            raw_transcript = (
+                body.raw_transcript if body.raw_transcript is not None else existing["raw_transcript"]
+            )
+            decisions = metadata.get("decisions") if isinstance(metadata.get("decisions"), list) else []
+            action_items = metadata.get("action_items") if isinstance(metadata.get("action_items"), list) else []
+
+            cur.execute(
+                """
+                UPDATE meetings
+                SET title = %s,
+                    started_at = %s,
+                    ended_at = %s,
+                    location = %s,
+                    summary = %s,
+                    summary_embedding = %s,
+                    raw_transcript = %s,
+                    metadata = %s
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    title,
+                    started_at,
+                    ended_at,
+                    location,
+                    summary,
+                    embed_text(summary) if summary else None,
+                    raw_transcript,
+                    Jsonb(metadata),
+                    meeting_id,
+                ),
+            )
+            updated = cur.fetchone()
+
+            memory_text = _meeting_memory_text(
+                title,
+                summary,
+                raw_transcript,
+                location,
+                decisions=decisions,
+                action_items=action_items,
+            )
+            cur.execute(
+                """
+                UPDATE memories
+                SET captured_at = %s,
+                    text = %s,
+                    embedding = %s,
+                    metadata = metadata || %s
+                WHERE related_meeting_id = %s
+                """,
+                (
+                    started_at,
+                    memory_text,
+                    embed_text(memory_text),
+                    Jsonb({"origin_meeting_id": str(meeting_id)}),
+                    meeting_id,
+                ),
+            )
+        conn.commit()
+    return _row_to_meeting(updated)
+
+
+@router.delete("/{meeting_id}", status_code=204)
+def delete_meeting(meeting_id: UUID):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT metadata FROM meetings WHERE id = %s", (meeting_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "meeting not found")
+            metadata = dict(row["metadata"] or {})
+            recording_path = metadata.get("recording_path")
+            cur.execute("DELETE FROM memories WHERE related_meeting_id = %s", (meeting_id,))
+            cur.execute("DELETE FROM meetings WHERE id = %s", (meeting_id,))
+        conn.commit()
+    if recording_path:
+        try:
+            path = Path(recording_path)
+            if path.exists() and path.is_file():
+                path.unlink()
+        except OSError:
+            pass
+    return None
 
 
 @router.post("/search", response_model=List[MeetingOut])

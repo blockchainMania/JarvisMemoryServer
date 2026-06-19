@@ -31,6 +31,7 @@ def summarize_transcript(transcript: str, title: str = "") -> dict:
         "properties": {
             "title": {"type": "string"},
             "summary": {"type": "string"},
+            "markdown_summary": {"type": "string"},
             "decisions": {"type": "array", "items": {"type": "string"}},
             "action_items": {"type": "array", "items": {"type": "string"}},
             "people": {"type": "array", "items": {"type": "string"}},
@@ -40,6 +41,7 @@ def summarize_transcript(transcript: str, title: str = "") -> dict:
         "required": [
             "title",
             "summary",
+            "markdown_summary",
             "decisions",
             "action_items",
             "people",
@@ -55,7 +57,16 @@ def summarize_transcript(transcript: str, title: str = "") -> dict:
                 "role": "system",
                 "content": (
                     "한국어 회의록 정리 도우미입니다. transcript에 없는 사실은 만들지 마세요. "
-                    "핵심 요약, 결정사항, 실행할 일, 사람, 회사를 구조화하세요."
+                    "핵심 요약, 결정사항, 실행할 일, 사람, 회사를 구조화하세요. "
+                    "markdown_summary는 노션 회의록처럼 읽기 좋은 마크다운으로 작성하세요. "
+                    "형식은 다음을 따르세요: "
+                    "# 제목, "
+                    "## 핵심 요약, "
+                    "## 결정사항, "
+                    "## 후속 작업, "
+                    "## 언급된 사람/회사, "
+                    "## 원문 핵심 포인트. "
+                    "강조가 필요한 부분은 **굵게** 표시하고, 항목은 불릿 리스트를 사용하세요."
                 ),
             },
             {

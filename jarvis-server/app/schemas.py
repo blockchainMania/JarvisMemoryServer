@@ -76,6 +76,16 @@ class MeetingSearchRequest(BaseModel):
     person_id: Optional[UUID] = None
 
 
+class MeetingUpdate(BaseModel):
+    title: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    location: Optional[str] = None
+    summary: Optional[str] = None
+    raw_transcript: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
 # ─── Memories ─────────────────────────────────────────────────
 class MemoryCreate(BaseModel):
     captured_at: datetime
@@ -117,6 +127,15 @@ class MemorySearchRequest(BaseModel):
     time_from: Optional[datetime] = None
     time_to: Optional[datetime] = None
     person_id: Optional[UUID] = None
+
+
+class MemoryUpdate(BaseModel):
+    captured_at: Optional[datetime] = None
+    text: Optional[str] = None
+    user_note: Optional[str] = None
+    ai_interpretation: Optional[str] = None
+    people_text: Optional[str] = None
+    metadata: Optional[dict] = None
 
 
 class MemoryRecentRequest(BaseModel):
