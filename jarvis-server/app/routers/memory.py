@@ -21,6 +21,7 @@ from ..schemas import (
     MemoryRecentRequest,
     MemorySearchRequest,
     MemoryUpdate,
+    PersonCandidate,
     UniversalSearchResult,
 )
 
@@ -570,7 +571,8 @@ def universal_search(body: MemorySearchRequest) -> List[UniversalSearchResult]:
     if not rows:
         return []
 
-    results = []
+    result_payloads = []
+    candidates_by_person_id: dict = {}
     with get_conn() as conn:
         with conn.cursor() as cur:
             for row in rows:
@@ -630,14 +632,51 @@ def universal_search(body: MemorySearchRequest) -> List[UniversalSearchResult]:
                 )
                 entities = cur.fetchall()
 
-                results.append(
-                    UniversalSearchResult(
-                        memory=_row_to_memory(row),
-                        score=float(row["_score"]),
-                        people=people,
-                        meeting=meeting,
-                        entities=entities,
-                        needs=needs,
-                    )
+                memory_score = float(row["_score"])
+                memory_text = str(row["text"] or "")
+                for person in people:
+                    person_id = person["id"]
+                    existing = candidates_by_person_id.get(person_id)
+                    if existing is None or memory_score > existing["score"]:
+                        candidates_by_person_id[person_id] = {
+                            "person": person,
+                            "score": memory_score,
+                            "evidence": memory_text[:160],
+                        }
+
+                result_payloads.append(
+                    {
+                        "memory": _row_to_memory(row),
+                        "score": memory_score,
+                        "people": people,
+                        "meeting": meeting,
+                        "entities": entities,
+                        "needs": needs,
+                    }
                 )
-    return results
+
+    person_candidates = [
+        PersonCandidate(
+            person=item["person"],
+            score=float(item["score"]),
+            evidence=item["evidence"],
+        )
+        for item in sorted(
+            candidates_by_person_id.values(),
+            key=lambda candidate: candidate["score"],
+            reverse=True,
+        )[: max(1, min(body.top_k, 5))]
+    ]
+
+    return [
+        UniversalSearchResult(
+            memory=payload["memory"],
+            score=payload["score"],
+            people=payload["people"],
+            person_candidates=person_candidates,
+            meeting=payload["meeting"],
+            entities=payload["entities"],
+            needs=payload["needs"],
+        )
+        for payload in result_payloads
+    ]

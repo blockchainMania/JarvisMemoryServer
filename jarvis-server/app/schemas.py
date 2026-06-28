@@ -148,10 +148,17 @@ class MemoryMatch(BaseModel):
     score: float
 
 
+class PersonCandidate(BaseModel):
+    person: PersonOut
+    score: float
+    evidence: str
+
+
 class UniversalSearchResult(BaseModel):
     memory: MemoryOut
     score: float
     people: List[PersonOut] = Field(default_factory=list)
+    person_candidates: List[PersonCandidate] = Field(default_factory=list)
     meeting: Optional[MeetingOut] = None
     entities: List[dict] = Field(default_factory=list)
     needs: List[dict] = Field(default_factory=list)

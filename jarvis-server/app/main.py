@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .config import settings
 from .db import close_pool, ensure_schema, open_pool
-from .routers import live, meetings, memory, needs, people, proposals
+from .routers import agent, integrations, live, mcp, meetings, memory, needs, people, proposals
 
 
 @asynccontextmanager
@@ -28,6 +28,9 @@ app.include_router(memory.router)
 app.include_router(live.router)
 app.include_router(needs.router)
 app.include_router(proposals.router)
+app.include_router(mcp.router)
+app.include_router(agent.router)
+app.include_router(integrations.router)
 
 
 @app.get("/health", tags=["health"])
