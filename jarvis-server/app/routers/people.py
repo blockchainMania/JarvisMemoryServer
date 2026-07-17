@@ -77,9 +77,9 @@ def create_person(body: PersonCreate) -> PersonOut:
             cur.execute(
                 """
                 INSERT INTO people
-                    (name, aliases, org, role, first_met_at, last_met_at,
+                    (name, aliases, org, role, phone, email, address, first_met_at, last_met_at,
                      face_embedding, notes_summary, metadata)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -87,6 +87,9 @@ def create_person(body: PersonCreate) -> PersonOut:
                     body.aliases,
                     body.org,
                     body.role,
+                    body.phone,
+                    body.email,
+                    body.address,
                     body.first_met_at,
                     body.last_met_at,
                     face_embedding,
