@@ -8,7 +8,14 @@ from psycopg.types.json import Jsonb
 from ..auth import require_api_key
 from ..db import get_conn
 from ..embeddings import embed_text
-from ..schemas import PersonCreate, PersonMatch, PersonOut, PersonSearchRequest
+from ..face_embeddings import embed_face_from_base64
+from ..schemas import (
+    PersonCreate,
+    PersonIdentifyRequest,
+    PersonMatch,
+    PersonOut,
+    PersonSearchRequest,
+)
 
 router = APIRouter(
     prefix="/people",
@@ -18,13 +25,53 @@ router = APIRouter(
 
 _PERSON_FIELDS = list(PersonOut.model_fields.keys())
 
+# Face count 0 or >1 both come back as this "no usable embedding" error text so the
+# root agent can relay it to the user verbatim instead of guessing which face was meant.
+_NO_FACE_ERROR = "얼굴이 잘 안 보여요. 정면으로 다시 비춰주시겠어요?"
+_MULTI_FACE_ERROR = "여러 사람이 보여서 정확히 인식할 수 없어요. 한 분만 나오게 다시 비춰주시겠어요?"
+
 
 def _row_to_person(row: dict) -> PersonOut:
     return PersonOut(**{k: row[k] for k in _PERSON_FIELDS})
 
 
+def _face_error(face_count: int) -> HTTPException:
+    return HTTPException(422, _MULTI_FACE_ERROR if face_count > 1 else _NO_FACE_ERROR)
+
+
+def _search_by_face_embedding(embedding: List[float], top_k: int) -> List[PersonMatch]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *, 1 - (face_embedding <=> %s::vector) AS _score
+                FROM people
+                WHERE face_embedding IS NOT NULL
+                ORDER BY face_embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (embedding, embedding, top_k),
+            )
+            rows = cur.fetchall()
+    return [PersonMatch(person=_row_to_person(r), score=float(r["_score"])) for r in rows]
+
+
+@router.post("/identify", response_model=List[PersonMatch])
+def identify_person(body: PersonIdentifyRequest) -> List[PersonMatch]:
+    embedding, face_count = embed_face_from_base64(body.image_base64)
+    if embedding is None:
+        raise _face_error(face_count)
+    return _search_by_face_embedding(embedding, body.top_k)
+
+
 @router.post("", response_model=PersonOut, status_code=201)
 def create_person(body: PersonCreate) -> PersonOut:
+    face_embedding = body.face_embedding
+    if face_embedding is None and body.image_base64:
+        face_embedding, face_count = embed_face_from_base64(body.image_base64)
+        if face_embedding is None:
+            raise _face_error(face_count)
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -42,7 +89,7 @@ def create_person(body: PersonCreate) -> PersonOut:
                     body.role,
                     body.first_met_at,
                     body.last_met_at,
-                    body.face_embedding,
+                    face_embedding,
                     body.notes_summary,
                     Jsonb(body.metadata),
                 ),
@@ -100,32 +147,23 @@ def search_people(body: PersonSearchRequest) -> List[PersonMatch]:
     if body.face_embedding is None and not body.query:
         raise HTTPException(400, "either face_embedding or query is required")
 
+    if body.face_embedding is not None:
+        return _search_by_face_embedding(body.face_embedding, body.top_k)
+
+    like = f"%{body.query}%"
     with get_conn() as conn:
         with conn.cursor() as cur:
-            if body.face_embedding is not None:
-                cur.execute(
-                    """
-                    SELECT *, 1 - (face_embedding <=> %s::vector) AS _score
-                    FROM people
-                    WHERE face_embedding IS NOT NULL
-                    ORDER BY face_embedding <=> %s::vector
-                    LIMIT %s
-                    """,
-                    (body.face_embedding, body.face_embedding, body.top_k),
-                )
-            else:
-                like = f"%{body.query}%"
-                cur.execute(
-                    """
-                    SELECT *, 1.0::float AS _score
-                    FROM people
-                    WHERE name ILIKE %s
-                       OR EXISTS (SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s)
-                       OR org ILIKE %s
-                    LIMIT %s
-                    """,
-                    (like, like, like, body.top_k),
-                )
+            cur.execute(
+                """
+                SELECT *, 1.0::float AS _score
+                FROM people
+                WHERE name ILIKE %s
+                   OR EXISTS (SELECT 1 FROM unnest(aliases) a WHERE a ILIKE %s)
+                   OR org ILIKE %s
+                LIMIT %s
+                """,
+                (like, like, like, body.top_k),
+            )
             rows = cur.fetchall()
 
     return [
