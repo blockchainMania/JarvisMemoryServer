@@ -14,6 +14,11 @@ class PersonCreate(BaseModel):
     first_met_at: Optional[datetime] = None
     last_met_at: Optional[datetime] = None
     face_embedding: Optional[List[float]] = None
+    # Raw photo, alternative to a pre-computed face_embedding -- the server detects the
+    # face and computes the embedding itself (see app/face_embeddings.py). Ignored if
+    # face_embedding is already provided.
+    image_base64: Optional[str] = None
+    image_mime_type: str = "image/jpeg"
     notes_summary: Optional[str] = None
     metadata: dict = Field(default_factory=dict)
 
@@ -41,6 +46,12 @@ class PersonSearchRequest(BaseModel):
 class PersonMatch(BaseModel):
     person: PersonOut
     score: float
+
+
+class PersonIdentifyRequest(BaseModel):
+    image_base64: str
+    image_mime_type: str = "image/jpeg"
+    top_k: int = 5
 
 
 # ─── Meetings ─────────────────────────────────────────────────
