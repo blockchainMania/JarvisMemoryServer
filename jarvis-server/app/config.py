@@ -20,6 +20,8 @@ class Settings:
     face_embedding_dim: int = int(os.getenv("FACE_EMBEDDING_DIM", "512"))
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "cpu")
 
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+
     openai_api_key: str = os.getenv("OPENAI_API_KEY") or os.getenv("GPT_API_KEY", "")
     openai_transcription_model: str = os.getenv(
         "OPENAI_TRANSCRIPTION_MODEL",
@@ -46,6 +48,8 @@ class Settings:
     notion_client_id: str = os.getenv("NOTION_CLIENT_ID", "")
     notion_client_secret: str = os.getenv("NOTION_CLIENT_SECRET", "")
     notion_redirect_uri: str = os.getenv("NOTION_REDIRECT_URI", "")
+
+    use_langgraph: bool = os.getenv("JARVIS_USE_LANGGRAPH", "false").lower() == "true"
 
 
 settings = Settings()
