@@ -1,3 +1,5 @@
+import logging
+import sys
 from datetime import datetime, timezone
 from typing import List
 from uuid import UUID
@@ -22,6 +24,19 @@ router = APIRouter(
     tags=["people"],
     dependencies=[Depends(require_api_key)],
 )
+
+# No similarity cutoff is applied to identify_person matches yet -- there's nothing to tune
+# against without seeing real score distributions first, so this logs every match attempt
+# (top candidate scores, and face-detection failures) instead. Same pattern as
+# app/routers/agent_flash.py's logger (dedicated handler, not root logger -- uvicorn's own
+# root config swallows plain logging.basicConfig() calls).
+logger = logging.getLogger("jarvis.people")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _handler = logging.StreamHandler(sys.stderr)
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    logger.addHandler(_handler)
+    logger.propagate = False
 
 _PERSON_FIELDS = list(PersonOut.model_fields.keys())
 
@@ -60,8 +75,14 @@ def _search_by_face_embedding(embedding: List[float], top_k: int) -> List[Person
 def identify_person(body: PersonIdentifyRequest) -> List[PersonMatch]:
     embedding, face_count = embed_face_from_base64(body.image_base64)
     if embedding is None:
+        logger.info("identify_person: no usable embedding (face_count=%d)", face_count)
         raise _face_error(face_count)
-    return _search_by_face_embedding(embedding, body.top_k)
+    matches = _search_by_face_embedding(embedding, body.top_k)
+    logger.info(
+        "identify_person: top matches %s",
+        [(m.person.name, round(m.score, 4)) for m in matches],
+    )
+    return matches
 
 
 @router.post("", response_model=PersonOut, status_code=201)
