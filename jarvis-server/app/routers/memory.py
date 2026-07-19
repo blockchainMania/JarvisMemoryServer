@@ -528,11 +528,17 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
     if filter_sql:
         filter_sql = f"AND {filter_sql}"
 
+    # related_meeting_id links a "meeting" memory row to its meetings record, but the memory's
+    # own synthesized text (title/summary/location only, see _meeting_memory_text) can miss a
+    # keyword that's actually in the meeting's full summary or raw_transcript. Joining meetings
+    # directly and matching against its own fields too means a meeting is findable by its real
+    # content, not just by whatever happened to make it into the synthesized memory text.
     exact_sql = f"""
         SELECT DISTINCT m.*, 1.15::float AS _score
         FROM memories m
         LEFT JOIN memory_entities me ON me.memory_id = m.id
         LEFT JOIN entities e ON e.id = me.entity_id
+        LEFT JOIN meetings mt ON mt.id = m.related_meeting_id
         WHERE 1 = 1
           {filter_sql}
           AND (
@@ -547,6 +553,9 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
               )
               OR e.label ILIKE %s
               OR e.entity_type ILIKE %s
+              OR mt.title ILIKE %s
+              OR mt.summary ILIKE %s
+              OR mt.raw_transcript ILIKE %s
           )
         ORDER BY m.captured_at DESC, m.created_at DESC
         LIMIT %s
@@ -565,7 +574,7 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
         with conn.cursor() as cur:
             cur.execute(
                 exact_sql,
-                filter_params + [like, like, like, like, like, like, like, limit],
+                filter_params + [like, like, like, like, like, like, like, like, like, like, limit],
             )
             exact_rows = cur.fetchall()
             cur.execute(
