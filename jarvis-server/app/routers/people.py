@@ -1,7 +1,7 @@
 import logging
 import sys
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -85,6 +85,25 @@ def identify_person(body: PersonIdentifyRequest) -> List[PersonMatch]:
     return matches
 
 
+def _find_existing_person(cur, name: str, org: Optional[str]):
+    # Same (name, org)-aware soft match as memory.py's _upsert_person_from_entity -- a person
+    # met via business card (name+org, no face) and later saved via save_person(name,
+    # attach_current_photo=true) (face, usually no org yet) are the same real person and must
+    # land on the same row, or identify_person can never find anyone who was first met through
+    # a business card, and a duplicate no-face/face pair accumulates per person.
+    cur.execute(
+        """
+        SELECT id FROM people
+        WHERE lower(name) = lower(%s)
+          AND (%s::text IS NULL OR org IS NULL OR lower(org) = lower(%s))
+        ORDER BY (org IS NOT NULL) DESC, updated_at DESC
+        LIMIT 1
+        """,
+        (name, org, org),
+    )
+    return cur.fetchone()
+
+
 @router.post("", response_model=PersonOut, status_code=201)
 def create_person(body: PersonCreate) -> PersonOut:
     face_embedding = body.face_embedding
@@ -95,6 +114,50 @@ def create_person(body: PersonCreate) -> PersonOut:
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            existing = _find_existing_person(cur, body.name, body.org)
+            if existing:
+                cur.execute(
+                    """
+                    UPDATE people SET
+                        aliases = (
+                            SELECT ARRAY(SELECT DISTINCT x FROM unnest(aliases || %s::text[]) AS x WHERE x <> '')
+                        ),
+                        org = COALESCE(%s, org),
+                        role = COALESCE(%s, role),
+                        phone = COALESCE(%s, phone),
+                        email = COALESCE(%s, email),
+                        address = COALESCE(%s, address),
+                        face_embedding = COALESCE(%s::vector, face_embedding),
+                        notes_summary = COALESCE(%s, notes_summary),
+                        first_met_at = LEAST(COALESCE(first_met_at, %s), COALESCE(%s, first_met_at, now())),
+                        last_met_at = GREATEST(COALESCE(last_met_at, %s), COALESCE(%s, last_met_at, now())),
+                        metadata = metadata || %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (
+                        body.aliases,
+                        body.org,
+                        body.role,
+                        body.phone,
+                        body.email,
+                        body.address,
+                        face_embedding,
+                        body.notes_summary,
+                        body.first_met_at,
+                        body.first_met_at,
+                        body.last_met_at,
+                        body.last_met_at,
+                        Jsonb(body.metadata),
+                        existing["id"],
+                    ),
+                )
+                row = cur.fetchone()
+                logger.info("create_person: merged into existing person id=%s name=%s", row["id"], body.name)
+                conn.commit()
+                return _row_to_person(row)
+
             cur.execute(
                 """
                 INSERT INTO people
