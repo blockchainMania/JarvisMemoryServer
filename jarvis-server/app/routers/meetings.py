@@ -31,6 +31,22 @@ def _row_to_meeting(row: dict) -> MeetingOut:
     return MeetingOut(**{k: row[k] for k in _MEETING_FIELDS})
 
 
+def _validate_person_ids(cur, person_ids: List[UUID]) -> None:
+    # person_ids previously went straight into meetings/memories with no existence check --
+    # any UUID (stale, mistyped, or hallucinated by the root agent) was silently accepted,
+    # producing a meeting whose participants can never actually be resolved via people.
+    if not person_ids:
+        return
+    cur.execute("SELECT id FROM people WHERE id = ANY(%s::uuid[])", (person_ids,))
+    found = {row["id"] for row in cur.fetchall()}
+    missing = [str(pid) for pid in person_ids if pid not in found]
+    if missing:
+        raise HTTPException(
+            422,
+            f"존재하지 않는 사람 ID가 있습니다: {', '.join(missing)}. 참석자를 먼저 저장하거나 person_id를 다시 확인해주세요.",
+        )
+
+
 def _meeting_memory_text(
     title: Optional[str],
     summary: Optional[str],
@@ -77,6 +93,7 @@ def create_meeting(body: MeetingCreate) -> MeetingOut:
     summary_embedding = embed_text(body.summary) if body.summary else None
     with get_conn() as conn:
         with conn.cursor() as cur:
+            _validate_person_ids(cur, body.person_ids)
             cur.execute(
                 """
                 INSERT INTO meetings
@@ -174,6 +191,12 @@ async def create_meeting_from_recording(
         parsed_person_ids = [UUID(value) for value in json.loads(person_ids)]
     except (ValueError, TypeError, json.JSONDecodeError):
         raise HTTPException(400, "person_ids must be a JSON UUID array")
+
+    # Validate before the paid transcription/summarization calls below, not after -- no point
+    # burning that cost on a request that's going to fail anyway.
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            _validate_person_ids(cur, parsed_person_ids)
 
     try:
         started = datetime.fromisoformat(started_at) if started_at else datetime.now(timezone.utc)
