@@ -11,6 +11,9 @@ class PersonCreate(BaseModel):
     aliases: List[str] = Field(default_factory=list)
     org: Optional[str] = None
     role: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
     first_met_at: Optional[datetime] = None
     last_met_at: Optional[datetime] = None
     face_embedding: Optional[List[float]] = None
@@ -29,6 +32,9 @@ class PersonOut(BaseModel):
     aliases: List[str]
     org: Optional[str]
     role: Optional[str]
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
     first_met_at: Optional[datetime]
     last_met_at: Optional[datetime]
     notes_summary: Optional[str]

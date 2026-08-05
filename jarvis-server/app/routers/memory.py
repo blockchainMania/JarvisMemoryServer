@@ -212,30 +212,61 @@ def _upsert_person_from_entity(cur, entity: dict, captured_at):
     name = entity["label"]
     metadata = dict(entity.get("metadata") or {})
     metadata["source"] = metadata.get("source") or "life_memory_entity"
+    # Business-card saves put company/role/phone/email/address here (see
+    # ToolDeclarations.entityArrayProp on the Android side) -- these are the fields that used
+    # to only survive as buried prose in a memory's ai_interpretation text and never made it
+    # onto the person record itself.
+    org = metadata.get("org") or metadata.get("company")
+    role = metadata.get("role")
+    phone = metadata.get("phone")
+    email = metadata.get("email")
+    address = metadata.get("address")
+
+    # Name-only matching used to merge/miss people across different companies who share a
+    # name. Prefer a same-org match; only fall back to a same-name/no-org match so we don't
+    # spuriously create a new row every time org is missing from a later mention.
     cur.execute(
         """
         SELECT id FROM people
         WHERE lower(name) = lower(%s)
+          AND (%s::text IS NULL OR org IS NULL OR lower(org) = lower(%s))
+        ORDER BY (org IS NOT NULL) DESC, updated_at DESC
         LIMIT 1
         """,
-        (name,),
+        (name, org, org),
     )
     row = cur.fetchone()
     if row:
         cur.execute(
-            "UPDATE people SET last_met_at = GREATEST(COALESCE(last_met_at, %s), %s), updated_at = now() WHERE id = %s",
-            (captured_at, captured_at, row["id"]),
+            """
+            UPDATE people SET
+                org = COALESCE(%s, org),
+                role = COALESCE(%s, role),
+                phone = COALESCE(%s, phone),
+                email = COALESCE(%s, email),
+                address = COALESCE(%s, address),
+                last_met_at = GREATEST(COALESCE(last_met_at, %s), %s),
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (org, role, phone, email, address, captured_at, captured_at, row["id"]),
         )
         return row["id"]
     cur.execute(
         """
-        INSERT INTO people (name, aliases, first_met_at, last_met_at, notes_summary, metadata)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO people (name, aliases, org, role, phone, email, address,
+                             first_met_at, last_met_at, notes_summary, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
             name,
             entity.get("aliases") or [],
+            org,
+            role,
+            phone,
+            email,
+            address,
             captured_at,
             captured_at,
             metadata.get("raw") or "Saved from life memory",
@@ -497,11 +528,17 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
     if filter_sql:
         filter_sql = f"AND {filter_sql}"
 
+    # related_meeting_id links a "meeting" memory row to its meetings record, but the memory's
+    # own synthesized text (title/summary/location only, see _meeting_memory_text) can miss a
+    # keyword that's actually in the meeting's full summary or raw_transcript. Joining meetings
+    # directly and matching against its own fields too means a meeting is findable by its real
+    # content, not just by whatever happened to make it into the synthesized memory text.
     exact_sql = f"""
         SELECT DISTINCT m.*, 1.15::float AS _score
         FROM memories m
         LEFT JOIN memory_entities me ON me.memory_id = m.id
         LEFT JOIN entities e ON e.id = me.entity_id
+        LEFT JOIN meetings mt ON mt.id = m.related_meeting_id
         WHERE 1 = 1
           {filter_sql}
           AND (
@@ -516,6 +553,9 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
               )
               OR e.label ILIKE %s
               OR e.entity_type ILIKE %s
+              OR mt.title ILIKE %s
+              OR mt.summary ILIKE %s
+              OR mt.raw_transcript ILIKE %s
           )
         ORDER BY m.captured_at DESC, m.created_at DESC
         LIMIT %s
@@ -534,7 +574,7 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
         with conn.cursor() as cur:
             cur.execute(
                 exact_sql,
-                filter_params + [like, like, like, like, like, like, like, limit],
+                filter_params + [like, like, like, like, like, like, like, like, like, like, limit],
             )
             exact_rows = cur.fetchall()
             cur.execute(
