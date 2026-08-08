@@ -17,6 +17,7 @@ from ..schemas import (
     PersonMatch,
     PersonOut,
     PersonSearchRequest,
+    PersonUpdate,
 )
 
 router = APIRouter(
@@ -218,6 +219,23 @@ def create_person(body: PersonCreate) -> PersonOut:
     return _row_to_person(row)
 
 
+@router.get("", response_model=List[PersonOut])
+def list_people(limit: int = 100, offset: int = 0) -> List[PersonOut]:
+    # Powers the app's Settings > 저장된 사람 list -- editing needs a browsable list, not just
+    # name/face search, since the whole point is to find and fix a person whose stored name is
+    # wrong or ambiguous.
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM people ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+                (limit, offset),
+            )
+            rows = cur.fetchall()
+    return [_row_to_person(row) for row in rows]
+
+
 @router.get("/{person_id}", response_model=PersonOut)
 def get_person(person_id: UUID) -> PersonOut:
     with get_conn() as conn:
@@ -226,6 +244,43 @@ def get_person(person_id: UUID) -> PersonOut:
             row = cur.fetchone()
             if not row:
                 raise HTTPException(404, "person not found")
+    return _row_to_person(row)
+
+
+@router.patch("/{person_id}", response_model=PersonOut)
+def update_person(person_id: UUID, body: PersonUpdate) -> PersonOut:
+    # Direct field-by-field edit -- deliberately NOT the COALESCE-merge semantics create_person
+    # uses for its dedup path. Only fields the caller actually set are touched (model_fields_set,
+    # not "is not None") so a correction like "이메일 빼줘" (explicit null) can clear a field,
+    # while every field the caller didn't mention stays exactly as-is. Powers both the voice
+    # update_person tool and the Settings edit screen -- same endpoint, same semantics either way.
+    set_fields = body.model_fields_set
+    if not set_fields:
+        raise HTTPException(400, "no fields to update")
+    if "name" in set_fields and not body.name:
+        raise HTTPException(422, "name cannot be cleared")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM people WHERE id = %s", (person_id,))
+            existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(404, "person not found")
+
+            updates = {field: getattr(body, field) for field in set_fields}
+            columns = list(updates.keys())
+            set_clause = ", ".join(f"{col} = %s" for col in columns)
+            cur.execute(
+                f"""
+                UPDATE people SET {set_clause}, updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                [updates[col] for col in columns] + [person_id],
+            )
+            row = cur.fetchone()
+        conn.commit()
+    logger.info("update_person: id=%s fields=%s", person_id, columns)
     return _row_to_person(row)
 
 

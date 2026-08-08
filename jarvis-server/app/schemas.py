@@ -43,6 +43,21 @@ class PersonOut(BaseModel):
     updated_at: datetime
 
 
+class PersonUpdate(BaseModel):
+    # All fields optional and unset-vs-null-aware (see PATCH /people/{id}): a field omitted from
+    # the request body is left untouched, but a field explicitly sent as null clears it -- unlike
+    # PersonCreate's merge-on-create semantics (COALESCE onto an existing row), this is a direct
+    # field-by-field edit, so a user correcting a wrong phone number must be able to blank it out.
+    name: Optional[str] = None
+    aliases: Optional[List[str]] = None
+    org: Optional[str] = None
+    role: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    notes_summary: Optional[str] = None
+
+
 class PersonSearchRequest(BaseModel):
     face_embedding: Optional[List[float]] = None
     query: Optional[str] = None
