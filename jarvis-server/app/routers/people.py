@@ -141,7 +141,7 @@ def _decide_match(matches: List[PersonMatch]) -> tuple:
     )
 
 
-@router.post("/identify", response_model=List[PersonMatch])
+@router.post("/identify", response_model=PersonIdentifyResponse)
 def identify_person(body: PersonIdentifyRequest) -> PersonIdentifyResponse:
     embedding, face_count, quality = embed_face_from_base64(body.image_base64)
     if embedding is None:
