@@ -67,12 +67,42 @@ class PersonSearchRequest(BaseModel):
 class PersonMatch(BaseModel):
     person: PersonOut
     score: float
+    # How many reference photos this person has enrolled. Surfaced so the caller can tell a
+    # weak match caused by too few/poor references apart from a genuine stranger, and suggest
+    # adding another photo rather than re-registering the same person from scratch.
+    face_count: int = 0
 
 
 class PersonIdentifyRequest(BaseModel):
     image_base64: str
     image_mime_type: str = "image/jpeg"
     top_k: int = 5
+
+
+class PersonIdentifyResponse(BaseModel):
+    # The scoring decision is made server-side rather than handed to the language model as raw
+    # cosine floats. Real production logs showed the model being asked to reason about a
+    # prompt-stated 0.4 threshold and rejecting genuine 0.29-0.36 matches as strangers -- the
+    # numeric call belongs where it can be tuned against logged score distributions, and the
+    # model should only relay the outcome.
+    decision: Literal["confident", "uncertain", "no_match"]
+    guidance: str
+    matches: List[PersonMatch] = Field(default_factory=list)
+    probe_quality: Optional[dict] = None
+
+
+class PersonFaceOut(BaseModel):
+    id: UUID
+    person_id: UUID
+    quality: dict
+    source: Optional[str] = None
+    created_at: datetime
+
+
+class PersonFaceAddRequest(BaseModel):
+    image_base64: str
+    image_mime_type: str = "image/jpeg"
+    source: Optional[str] = None
 
 
 # ─── Meetings ─────────────────────────────────────────────────

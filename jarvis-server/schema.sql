@@ -128,3 +128,35 @@ CREATE TABLE IF NOT EXISTS proposal_points (
     generated_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS proposal_points_person_id ON proposal_points (person_id);
+-- Multiple reference photos per person.
+--
+-- ArcFace compares one probe vector against one stored vector, so with a single stored
+-- photo per person the recognition ceiling is fixed by whatever angle/lighting that one
+-- capture happened to have. Production logs (jarvis.people, 2026-08-06..08-14) showed the
+-- same person scoring 0.29-0.36 against a poor stored reference across 7+ attempts, and
+-- 0.75-0.87 once a better photo replaced it. Storing several photos per person and taking
+-- the per-person max lets recognition improve with use instead of being capped at the
+-- first capture.
+CREATE TABLE IF NOT EXISTS person_faces (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    person_id   uuid NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    embedding   vector(512) NOT NULL,
+    quality     jsonb NOT NULL DEFAULT '{}'::jsonb,
+    source      text,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS person_faces_person_id ON person_faces (person_id);
+CREATE INDEX IF NOT EXISTS person_faces_hnsw
+    ON person_faces USING hnsw (embedding vector_cosine_ops);
+
+-- Backfill every face already stored on people.face_embedding. Guarded so re-running the
+-- migration cannot duplicate them (the source tag is what marks a backfilled row).
+INSERT INTO person_faces (person_id, embedding, quality, source)
+SELECT p.id, p.face_embedding, '{}'::jsonb, 'migrated_from_people'
+FROM people p
+WHERE p.face_embedding IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM person_faces f
+      WHERE f.person_id = p.id AND f.source = 'migrated_from_people'
+  );
