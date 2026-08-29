@@ -528,6 +528,10 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
     if filter_sql:
         filter_sql = f"AND {filter_sql}"
 
+    # A need ("안전성 인증서 요구") lives only in the needs table -- its wording never makes it
+    # into any memory's text, so asking about the need itself used to match nothing at all. The
+    # EXISTS below lets a memory be found by a need attached to its person or its meeting.
+    #
     # related_meeting_id links a "meeting" memory row to its meetings record, but the memory's
     # own synthesized text (title/summary/location only, see _meeting_memory_text) can miss a
     # keyword that's actually in the meeting's full summary or raw_transcript. Joining meetings
@@ -556,6 +560,15 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
               OR mt.title ILIKE %s
               OR mt.summary ILIKE %s
               OR mt.raw_transcript ILIKE %s
+              OR EXISTS (
+                  SELECT 1
+                  FROM needs n
+                  WHERE n.text ILIKE %s
+                    AND (
+                        n.meeting_id = m.related_meeting_id
+                        OR n.person_id = ANY(COALESCE(m.related_person_ids, ARRAY[]::uuid[]))
+                    )
+              )
           )
         ORDER BY m.captured_at DESC, m.created_at DESC
         LIMIT %s
@@ -574,7 +587,7 @@ def _search_memory_rows(body: MemorySearchRequest) -> list:
         with conn.cursor() as cur:
             cur.execute(
                 exact_sql,
-                filter_params + [like, like, like, like, like, like, like, like, like, like, limit],
+                filter_params + [like] * 11 + [limit],
             )
             exact_rows = cur.fetchall()
             cur.execute(
@@ -605,6 +618,15 @@ def search_memories(body: MemorySearchRequest) -> List[MemoryMatch]:
     return [MemoryMatch(memory=_row_to_memory(r), score=float(r["_score"])) for r in rows]
 
 
+# A person's needs are a strong claim ("this person wants X"), so they are only attached to a
+# result that actually matched -- not to whatever filled out the top-N. Measured on this
+# deployment: a genuine hit for a needs question scores 0.57+ ("박배터리가 뭘 원한다고 했지"
+# 0.576, "박배터리 니즈" 0.572), while rows that merely padded the result set scored 0.38-0.47
+# ("이유하" 0.388, "최셀 예산" 0.381). Without this floor those padding rows dragged an unrelated
+# person's needs into the answer, which reads to the model as fact.
+_NEEDS_MIN_SCORE = 0.5
+
+
 @router.post("/universal-search", response_model=List[UniversalSearchResult])
 def universal_search(body: MemorySearchRequest) -> List[UniversalSearchResult]:
     rows = _search_memory_rows(body)
@@ -617,6 +639,7 @@ def universal_search(body: MemorySearchRequest) -> List[UniversalSearchResult]:
         with conn.cursor() as cur:
             for row in rows:
                 person_ids = row["related_person_ids"] or []
+                meeting_id = row["related_meeting_id"]
                 people = []
                 needs = []
                 if person_ids:
@@ -625,30 +648,24 @@ def universal_search(body: MemorySearchRequest) -> List[UniversalSearchResult]:
                         (person_ids,),
                     )
                     people = cur.fetchall()
-                    if row["related_meeting_id"]:
-                        cur.execute(
-                            """
-                            SELECT id, person_id, meeting_id, text, category,
-                                   confidence, metadata, created_at
-                            FROM needs
-                            WHERE meeting_id = %s
-                            ORDER BY created_at DESC
-                            LIMIT 20
-                            """,
-                            (row["related_meeting_id"],),
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT id, person_id, meeting_id, text, category,
-                                   confidence, metadata, created_at
-                            FROM needs
-                            WHERE person_id = ANY(%s::uuid[])
-                            ORDER BY created_at DESC
-                            LIMIT 20
-                            """,
-                            (person_ids,),
-                        )
+                # Person needs and meeting needs are unioned rather than chosen between. The old
+                # either/or meant a memory that happened to carry a meeting id returned only that
+                # one meeting's needs, hiding everything else known about the same person -- so
+                # "김윤섭이 뭘 원한다고 했지?" answered from a single meeting instead of all of them.
+                # Also runs when only a meeting is linked; needs used to be skipped entirely then.
+                if (person_ids or meeting_id) and float(row["_score"]) >= _NEEDS_MIN_SCORE:
+                    cur.execute(
+                        """
+                        SELECT id, person_id, meeting_id, text, category,
+                               confidence, metadata, created_at
+                        FROM needs
+                        WHERE person_id = ANY(%s::uuid[])
+                           OR (%s::uuid IS NOT NULL AND meeting_id = %s::uuid)
+                        ORDER BY created_at DESC
+                        LIMIT 20
+                        """,
+                        (person_ids, meeting_id, meeting_id),
+                    )
                     needs = cur.fetchall()
 
                 meeting = None
