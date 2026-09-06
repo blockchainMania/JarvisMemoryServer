@@ -5,13 +5,24 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _required(name: str) -> str:
+    """Reads a secret from the environment, refusing to invent one."""
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set. Copy .env.example to .env and fill it in "
+            f"(see the README) -- there is deliberately no default."
+        )
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://jarvis:jarvis_dev_password@localhost:5433/jarvis",
-    )
-    api_key: str = os.getenv("API_KEY", "dev-secret-change-me")
+    # No fallbacks for these two. A default that happens to work is a default nobody replaces:
+    # this file is public, so anything written here is a published credential that stays valid
+    # until someone notices. Failing to start is the louder, safer outcome.
+    database_url: str = _required("DATABASE_URL")
+    api_key: str = _required("API_KEY")
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
 

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 BASE=${BASE:-http://localhost:8000}
-API_KEY=${API_KEY:-dev-secret-change-me}
+API_KEY=${API_KEY:?set API_KEY, e.g. export API_KEY=$(grep ^API_KEY .env | cut -d= -f2-)}
 H="X-API-Key: $API_KEY"
 
 echo "════ 1. 방금 만난 사람 저장해줘 ════"
