@@ -6,7 +6,8 @@ services:
     environment:
       POSTGRES_DB: jarvis
       POSTGRES_USER: jarvis
-      POSTGRES_PASSWORD: jarvis_dev_password
+      # Comes from .env; compose fails loudly rather than falling back to a known value.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
       - "5433:5432"
     volumes:
